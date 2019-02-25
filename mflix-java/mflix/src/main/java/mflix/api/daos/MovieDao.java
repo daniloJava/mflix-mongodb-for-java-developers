@@ -22,6 +22,7 @@ import com.mongodb.client.model.Field;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.Sorts;
+import com.mongodb.client.model.Variable;
 
 @Component
 public class MovieDao extends AbstractMFlixDao {
@@ -38,7 +39,20 @@ public class MovieDao extends AbstractMFlixDao {
 
 	@SuppressWarnings("unchecked")
 	private Bson buildLookupStage() {
-		return null;
+		List<Variable<String>> let = new ArrayList<>();
+		let.add(new Variable<>("id", "$_id"));
+
+		// lookup pipeline
+		Bson exprMatch = Document.parse("{'$expr': {'$eq': ['$movie_id', '$$id']}}");
+
+		Bson lookupMatch = Aggregates.match(exprMatch);
+		List<Bson> lookUpPipeline = new ArrayList<>();
+		// lookup sort stage
+		Bson sortLookup = Aggregates.sort(Sorts.descending("date"));
+
+		lookUpPipeline.add(lookupMatch);
+		lookUpPipeline.add(sortLookup);
+		return Aggregates.lookup("comments", let, lookUpPipeline, "comments");
 
 	}
 
@@ -72,11 +86,14 @@ public class MovieDao extends AbstractMFlixDao {
 		List<Bson> pipeline = new ArrayList<>();
 		// match stage to find movie
 		Bson match = Aggregates.match(Filters.eq("_id", new ObjectId(movieId)));
+		Bson count = Aggregates.count();
 		pipeline.add(match);
-		// TODO> Ticket: Get Comments - implement the lookup stage that allows the comments to
-		// retrieved with Movies.
-		Document movie = moviesCollection.aggregate(pipeline).first();
+		Bson lookup = buildLookupStage();
+		if (lookup != null) {
+			pipeline.add(lookup);
+		}
 
+		Document movie = moviesCollection.aggregate(pipeline).batchSize(1).iterator().tryNext();
 		return movie;
 	}
 
@@ -268,6 +285,10 @@ public class MovieDao extends AbstractMFlixDao {
 		// Your job is to order the stages correctly in the pipeline.
 		// Starting with the `matchStage` add the remaining stages.
 		pipeline.add(matchStage);
+		pipeline.add(sortStage);
+		pipeline.add(skipStage);
+		pipeline.add(limitStage);
+		pipeline.add(facetStage);
 
 		moviesCollection.aggregate(pipeline).iterator().forEachRemaining(movies::add);
 		return movies;
