@@ -17,6 +17,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 
 import com.mongodb.MongoClientSettings;
+import com.mongodb.MongoWriteException;
+import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.Filters;
@@ -58,8 +60,12 @@ public class UserDao extends AbstractMFlixDao {
 	 * @return True if successful, throw IncorrectDaoOperation otherwise
 	 */
 	public boolean addUser(User user) {
-		usersCollection.insertOne(user);
-		return true;
+		try {
+			usersCollection.withWriteConcern(WriteConcern.MAJORITY).insertOne(user);
+			return true;
+		} catch (MongoWriteException e) {
+			throw new IncorrectDaoOperation("User email " + user.getEmail() + " already exists");
+		}
 
 	}
 
@@ -73,11 +79,16 @@ public class UserDao extends AbstractMFlixDao {
 	 * @return true if successful
 	 */
 	public boolean createUserSession(String userId, String jwt) {
-		Bson updateFilter = new Document("user_id", userId);
-		Bson setUpdate = Updates.set("jwt", jwt);
-		UpdateOptions options = new UpdateOptions().upsert(true);
-		sessionsCollection.updateOne(updateFilter, setUpdate, options);
-		return true;
+		try {
+			Bson updateFilter = new Document("user_id", userId);
+			Bson setUpdate = Updates.set("jwt", jwt);
+			UpdateOptions options = new UpdateOptions().upsert(true);
+			sessionsCollection.updateOne(updateFilter, setUpdate, options);
+			return true;
+
+		} catch (MongoWriteException e) {
+			throw new IncorrectDaoOperation("sessions collection filed " + e.getMessage());
+		}
 	}
 
 	/**
@@ -120,15 +131,20 @@ public class UserDao extends AbstractMFlixDao {
 	 * @return true if user successfully removed
 	 */
 	public boolean deleteUser(String email) {
-		if (deleteUserSessions(email)) {
-			Document userDeleteFilter = new Document("email", email);
-			DeleteResult res = usersCollection.deleteOne(userDeleteFilter);
+		try {
+			if (deleteUserSessions(email)) {
+				Document userDeleteFilter = new Document("email", email);
+				DeleteResult res = usersCollection.deleteOne(userDeleteFilter);
 
-			if (res.getDeletedCount() < 0) {
-				log.warn("User with `email` {} not found. Potential concurrent operation?!");
+				if (res.getDeletedCount() < 0) {
+					log.warn("User with `email` {} not found. Potential concurrent operation?!");
+				}
+
+				return res.wasAcknowledged();
 			}
+		} catch (Exception e) {
+			throw new IncorrectDaoOperation("Filed delete user " + email + " " + e.getMessage());
 
-			return res.wasAcknowledged();
 		}
 		return false;
 	}
@@ -151,8 +167,13 @@ public class UserDao extends AbstractMFlixDao {
 		Bson queryFilter = new Document("email", email);
 
 		User wrongBandName = usersCollection.find(queryFilter).iterator().tryNext();
-		UpdateResult updateOne = usersCollection.updateOne(queryFilter, set("preferences", userPreferences));
+		try {
+			UpdateResult updateOne = usersCollection.updateOne(queryFilter, set("preferences", userPreferences));
 
-		return updateOne.isModifiedCountAvailable();
+			return updateOne.isModifiedCountAvailable();
+		} catch (MongoWriteException e) {
+			throw new IncorrectDaoOperation("Filed update user " + email + " " + e.getMessage());
+		}
+
 	}
 }
